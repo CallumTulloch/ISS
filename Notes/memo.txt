@@ -1,0 +1,6 @@
+nohup python -u main.py > iss_result_same_with_span2_2.txt &
+nohup python -u main_limit_backprop.py > iss_result_same_with_span2_limit_prop.txt &
+
+・疑問点
+1．最終層は単語１つなのにTLを利用する意味があるのか．
+2．attention-head の数は64次元に合わせればいいか
