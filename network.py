@@ -156,14 +156,18 @@ class SRLDecoder(nn.Module):
 
 class GumbelSoftmaxPolicy(nn.Module):
     def __init__(self, n_actions, hidden_size, seq_len):
-        super().__init__()
-        self.n_actions = n_actions
-        self.tau = torch.tensor(1.0)  # 温度．0.1, 0.5, 1.0 でテスト
+        super(GumbelSoftmaxPolicy, self).__init__()
+        self.tau = torch.tensor(0.1)                              # 温度．0.1, 0.5, 1.0 でテスト
         self.linear_in_dim = hidden_size*seq_len
-        self.linear = nn.Linear(self.linear_in_dim, n_actions)    # input, output
-        self.linear2 = nn.Linear(n_actions*2, n_actions)    # input, output
+        self.linear = nn.Linear(self.linear_in_dim, n_actions-1)    # input, output, srlラベルならn_action-1
+        self.linear2 = nn.Linear((n_actions-1)*3, n_actions)            # input, output
         
-    def forward(self, states, embeddings):
+        nn.init.normal_(self.linear.weight, std=0.02)
+        nn.init.normal_(self.linear.bias, 0)
+        nn.init.normal_(self.linear2.weight, std=0.02)
+        nn.init.normal_(self.linear2.bias, 0)
+        
+    def forward(self, states, prev_arg_indication, embeddings):
         """
         Args:
             states (): 
@@ -185,38 +189,74 @@ class GumbelSoftmaxPolicy(nn.Module):
             token_vecs_flat = torch.cat([token_vecs_flat, pad], dim=1)
 
         output = self.linear(token_vecs_flat)
-        logits = self.linear2(torch.cat([states, output], dim=1))
+        logits = self.linear2(torch.cat([output, states, prev_arg_indication], dim=1))
         gumbel_noise = torch.distributions.gumbel.Gumbel(loc=0.0, scale=1.0).sample(logits.shape).to(embeddings.device)
-        progs = nn.functional.softmax(logits + gumbel_noise / self.tau, dim=0)
-        next_trans = torch.argmax(progs, dim=1)
+        probs = nn.functional.softmax((logits + gumbel_noise) / self.tau, dim=0)
+        #next_trans = torch.argmax(probs, dim=1)
             
-        return progs, next_trans
+        return probs
+
+    def predict(self, states, prev_arg_indication, embeddings):
+        """
+        Args:
+            states (): 
+            custom_embeddings (): 意味役割ラベルを埋め込んだトークエンベディング
+            
+        Returns:
+            next_trans ():
+        """
+        # Calculate the total size needed for padding
+        batch_size, _, _ = embeddings.size()
+        
+        # Reshape and pad if necessary
+        token_vecs_flat = embeddings.reshape(batch_size, -1)
+        pad_size = self.linear_in_dim - token_vecs_flat.size(1)
+        
+        if pad_size > 0:
+            pad = torch.zeros(batch_size, pad_size, device=embeddings.device)
+            token_vecs_flat = torch.cat([token_vecs_flat, pad], dim=1)
+
+        output = self.linear(token_vecs_flat)
+        logits = self.linear2(torch.cat([output, states, prev_arg_indication], dim=1))
+        probs = nn.functional.softmax(logits, dim=0)
+        next_trans = torch.argmax(probs, dim=1)
+        
+        return next_trans
     
     def cal_rewards(self, preds, targets, max_token):
-        rewards = 0
+        rewards = []
         for i, (pred, targ) in enumerate(zip(preds, targets)):
+            reward = 0
             p_start, p_end, p_srl = pred
             t_start, t_end, t_srl = targ
             # start がNullでないなら
             if t_start != max_token-1:
                 if p_start == t_start:
-                    rewards += 1
+                    reward += 1
                 else:
-                    rewards -= 1
+                    reward -= 1
+                    rewards.append(reward)
                     continue
+                
                 if p_end == t_end:
-                    rewards += 1
+                    reward += 1
                 else:
-                    rewards -= 1
+                    reward -= 1
+                    rewards.append(reward)
                     continue
+                
                 if p_srl == t_srl:
-                    rewards += 1
+                    reward += 1
                 else:
-                    rewards -= 1
+                    reward -= 1
+                rewards.append(reward)
+                    
             # Nullが推測できれば+1．ペナルティなし
             else:
                 if p_start == t_start:
-                    rewards += 1
+                    reward += 1
+                rewards.append(reward)
+        assert len(targets) == len(rewards)
             
         return rewards
 

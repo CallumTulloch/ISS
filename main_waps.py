@@ -12,7 +12,7 @@ from transformers import BertConfig
 
 sys.path.append('../')
 from network import SentenceEncoder, SRLEncoder2, StartDecoder, EndDecoder, SRLDecoder, GumbelSoftmaxPolicy
-from prepare_dataset_v2 import split2ttv, mk_dataset
+from ISS.prepare_dataset_waps import split2ttv, mk_dataset
 from Evaluation.evaluate import cal_label_f1, cal_span_f1, span2seq, get_pred_dic_lists
 
 
@@ -21,7 +21,7 @@ BATCH_SIZE = 32     # 大きい方がよい?
 ITERS_TO_ACCUMULATE = 1
 MAX_ITER = 7        # データセット内最大 srl 数．
 DATAPATH = 'Data/common_data_v2_bert.json'
-DATAPATH = '/data1/takelab/takeuchi/callum/ISS/Data/common_data_v2_bert.json'
+#DATAPATH = '/data1/takelab/takeuchi/callum/ISS/Data/common_data_v2_bert.json'
 PRETRAINED_MODEL = "cl-tohoku/bert-base-japanese-v2"
 VERSION = 'waps'
 MODEL_NAME = 'batch32_commonv3'
@@ -171,7 +171,7 @@ if __name__ == '__main__':
         num_attention_heads=32     # 1つのヘッドが64になるように設定
     )
     decoder_config3 = BertConfig(
-        num_hidden_layers=1,     # Transformerのレイヤー数
+        num_hidden_layers=2,     # Transformerのレイヤー数
         hidden_size=768*2+256*4, # token_s + srl*2 + token_e + srl*2
         num_attention_heads=40   # 1つのヘッドが64になるように設定
     )
@@ -202,7 +202,7 @@ if __name__ == '__main__':
            [{'params': srl_encoder.parameters(), 'lr': 1e-4},
             {'params': start_decoder.parameters(), 'lr': 1e-4},
             {'params': end_decoder.parameters(), 'lr': 1e-4},
-            {'params': srl_decoder.parameters(), 'lr': 1e-4}]
+            {'params': srl_decoder.parameters(), 'lr': 5e-5}]
         )
         optimizer2 = optim.SGD(policy.parameters(), lr=0.01)
         
@@ -290,6 +290,7 @@ if __name__ == '__main__':
                             batch_policy_loss = -torch.mean(torch.sum(rewards * torch.log(probs_rl), dim=0))
                             batch_policy_loss.backward(retain_graph=True)
                             policy_loss_sum += batch_policy_loss.item() / ITERS_TO_ACCUMULATE
+                            
 
                 if (i + 1) % ITERS_TO_ACCUMULATE == 0:
                     optimizer.step()
@@ -327,11 +328,11 @@ if __name__ == '__main__':
     
     
     """Test"""
-    sentence_encoder.load_state_dict(torch.load(f'/data1/takelab/takeuchi/callum/ISS/{MODEL_PATH}/{MODEL_NAME}_SentenceEncoder.pth'))
-    srl_encoder.load_state_dict(torch.load(f'/data1/takelab/takeuchi/callum/ISS/{MODEL_PATH}/{MODEL_NAME}_SrlEncoder.pth'))
-    start_decoder.load_state_dict(torch.load(f'/data1/takelab/takeuchi/callum/ISS/{MODEL_PATH}/{MODEL_NAME}_StartDecoder.pth'))
-    end_decoder.load_state_dict(torch.load(f'/data1/takelab/takeuchi/callum/ISS/{MODEL_PATH}/{MODEL_NAME}_EndDecoder.pth'))
-    srl_decoder.load_state_dict(torch.load(f'/data1/takelab/takeuchi/callum/ISS/{MODEL_PATH}/{MODEL_NAME}_SrlDecoder.pth'))
+    sentence_encoder.load_state_dict(torch.load(f'{MODEL_PATH}/{MODEL_NAME}_SentenceEncoder.pth'))
+    srl_encoder.load_state_dict(torch.load(f'{MODEL_PATH}/{MODEL_NAME}_SrlEncoder.pth'))
+    start_decoder.load_state_dict(torch.load(f'{MODEL_PATH}/{MODEL_NAME}_StartDecoder.pth'))
+    end_decoder.load_state_dict(torch.load(f'{MODEL_PATH}/{MODEL_NAME}_EndDecoder.pth'))
+    srl_decoder.load_state_dict(torch.load(f'{MODEL_PATH}/{MODEL_NAME}_SrlDecoder.pth'))
     
     # 推論，評価
     predictions, answers = test(sentence_encoder, srl_encoder, start_decoder, end_decoder, srl_decoder, test_dataset, lab2id, id2lab)

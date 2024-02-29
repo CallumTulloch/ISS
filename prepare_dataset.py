@@ -87,7 +87,7 @@ def mk_target_labels(orders, lab2id, max_token):
 def mk_arg_indication(orders, lab2id):
     arg_indication = [0]*(len(lab2id)-3)
     for s, e, arg in orders:
-        arg_indication[lab2id[arg]] = 1
+        arg_indication[lab2id[arg]] += 1
     
     return arg_indication
 
@@ -105,7 +105,8 @@ def mapping(set, bert_tokenizer, max_token, lab2id):
         arg_indications.append(mk_arg_indication(orders, lab2id))
         target_SL, target_EL, target_SRLL = mk_target_labels(orders, lab2id, max_token)
         target_start_labels.append(target_SL), target_end_labels.append(target_EL), target_srl_labels.append(target_SRLL)
-        target_dict = {f'{lab}':[] for lab in lab2id.keys()}
+        target_dict = {f'{val}':[] for val in lab2id.values()}
+        target_dict['-1'] = []
         for s, e, srl in zip(target_SL, target_EL, target_SRLL):
             target_dict[f'{srl}'].append([s, e])
         target_dict_list.append(target_dict)
@@ -145,3 +146,64 @@ def mk_dataset(df, batch_size, pretrained_model, max_token, lab2id):
     #return batch_set
     batch_set = [mapping(set, bert_tokenizer, max_token, lab2id) for set in batch_set]
     return batch_set, groups
+
+
+""" RL """
+def mk_patial_labels_rl(token_num, pred, lab2id, longest_token_num):
+    spans = [(pred['word_start'], pred['word_end'], 'V')]
+    
+    # init
+    partial_srl_labels = span2seq(spans, token_num, longest_token_num - token_num, lab2id)
+    return partial_srl_labels
+
+
+def mapping_rl(set, bert_tokenizer, max_token, lab2id):
+    sentences, attention_masks, arg_indications, partial_srl_labels, target_dict_list = [], [], [], [], []
+    longest_token_num = max(set['num_of_tokens'])
+    for sent, pred, token_num, orders in zip(set['sentence'], set['predicate'], set['num_of_tokens'], set['label_order_to_give']):
+        ids, attention_mask = bert_tokenizer.tokenize(sent, longest_token_num - token_num, max_token)
+        sentences.append(ids)
+        attention_masks.append(attention_mask)
+        arg_indications.append(mk_arg_indication(orders, lab2id))
+        partial_srl_labels.append(mk_patial_labels_rl(token_num, pred, lab2id, longest_token_num))
+        
+        target_SL, target_EL, target_SRLL = mk_target_labels(orders, lab2id, max_token)
+        target_dict = {f'{id}':[] for id in lab2id.values()}
+        target_dict['-1'] = []
+        for s, e, srl in zip(target_SL, target_EL, target_SRLL):
+            target_dict[f'{srl}'].append([s, e, srl])
+        target_dict_list.append(target_dict)
+        
+    sentences, attention_masks = torch.tensor(sentences, dtype=torch.long), torch.tensor(attention_masks, dtype=torch.long)
+    partial_srl_labels = torch.tensor(partial_srl_labels, dtype=torch.long)
+    iter_len = torch.tensor(len(set['label_order_to_give'].iloc[0])+1, dtype=torch.long)
+    arg_indications = torch.tensor(arg_indications)
+    
+    return [sentences, attention_masks, partial_srl_labels, arg_indications, target_dict_list, iter_len]
+
+
+def mk_dataset_rl(df, batch_size, pretrained_model, max_token, lab2id, seed=0):
+    bert_tokenizer = BertTokenizer(pretrained_model)
+    np.random.seed(seed)
+
+    #意味役割の数でグループを作成
+    df['num_of_tokens'] = df['sentence'].map(lambda x: len(x.split(' ')))
+    df['labels_per_a_pred'] = df['args'].map(lambda x: len(x))
+    df['label_order_to_give'] = df['args'].map(lambda x: sorted([(e['word_start'], e['word_end'], e['argrole']) for e in x], key = lambda k: np.random.random()))
+    df = df.sort_values(by='labels_per_a_pred')
+    groups = df.groupby('labels_per_a_pred')
+    group_labels = groups.groups.keys()
+    
+    # 意味役割の数毎にミニバッチを作成し統合
+    batch_set = []
+    for i, group_label in enumerate(group_labels):
+        #print(f"Step {i+1}/{len(group_labels)}")
+        group_df = groups.get_group(group_label)  # グループデータを一度だけ取得
+        group_size = len(group_df)
+        batch_indices = range(0, group_size, batch_size)  # バッチごとの開始インデックスを計算
+        #print(group_df.iloc[0,:])
+        batch_set += [group_df.iloc[start_idx:start_idx+batch_size] for start_idx in batch_indices]
+
+    #return batch_set
+    dataset = [mapping_rl(set, bert_tokenizer, max_token, lab2id) for set in batch_set]
+    return dataset, groups
